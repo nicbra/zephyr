@@ -346,6 +346,7 @@ static int element_token(enum json_tokens token)
 	case JSON_TOK_ARRAY_START:
 	case JSON_TOK_STRING:
 	case JSON_TOK_STRING_BUF:
+	case JSON_TOK_CBPRINTF_PACKAGE:
 	case JSON_TOK_NUMBER:
 	case JSON_TOK_INT:
 	case JSON_TOK_UINT:
@@ -1453,6 +1454,56 @@ static int str_encode(const char *str, json_append_bytes_t append_bytes,
 	return ret;
 }
 
+struct out_ctx {
+	json_append_bytes_t append_bytes;
+	void* data;
+};
+
+
+static int cbpprint_callback(int c, void *context)	// TODO: ha denne et generelt sted
+{
+	struct out_ctx *ctx = context;
+	int ret = 0;
+
+	char escaped = escape_as(c);
+
+	if (escaped) {
+		char bytes[2] = { '\\', escaped };
+		ret = ctx->append_bytes(bytes, 2, ctx->data);
+	} else {
+		ret = ctx->append_bytes(c, 1, ctx->data);
+	}
+	
+	if (ret == 0) {
+		ret = (int)(unsigned char)c;
+	}
+
+	return ret;
+}
+
+static int cbprint_encode(void *package, json_append_bytes_t append_bytes,
+		      void *data)
+{
+	int ret;
+
+	ret = append_bytes("\"", 1, data);
+	if (ret < 0) {
+		return ret;
+	}
+
+	struct out_ctx ctx {
+		.append_bytes = append_bytes,
+		.data = data,
+	};
+
+	ret = cbpprintf(cbpprint_callback, &ctx, package);
+	if (ret >= 0) {
+		return append_bytes("\"", 1, data);
+	}
+
+	return ret;
+}
+
 static int int32_encode(const int32_t *num, json_append_bytes_t append_bytes,
 			void *data)
 {
@@ -1704,6 +1755,8 @@ static int encode(const struct json_obj_descr *descr, const void *val,
 	}
 	case JSON_TOK_STRING_BUF:
 		return str_encode(ptr, append_bytes, data);
+	case JSON_TOK_CBPRINTF_PACKAGE:
+		return cbprint_encode(ptr, append_bytes, data);
 	case JSON_TOK_ARRAY_START:
 		return arr_encode(descr->array.element_descr, ptr,
 				  val, append_bytes, data);
@@ -2047,6 +2100,11 @@ static int encode_mixed_value(const struct json_mixed_arr_descr *elem,
 	case JSON_TOK_STRING_BUF: {
 		return str_encode(field, append_bytes, data);
 	}
+
+	case JSON_TOK_CBPRINTF_PACKAGE: {
+		return cbprint_encode(field, append_bytes, data);
+	}
+
 	case JSON_TOK_NUMBER: {
 		return int32_encode(field, append_bytes, data);
 	}
